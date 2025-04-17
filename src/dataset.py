@@ -1,59 +1,57 @@
-import os
-import re
-import mailbox
+import os, mailbox, re
 from torch.utils.data import Dataset
 from sklearn.feature_extraction.text import CountVectorizer
 
 class EmailDataset(Dataset):
     def __init__(self, root_dir, label, vectorizer=None, max_features=5000):
-        """
-        root_dir: 存放 mbox 或 .eml 文件的目录
-        label: 1 表示钓鱼邮件，0 表示正常邮件
-        vectorizer: sklearn CountVectorizer，共享词典
-        max_features: 词袋维度
-        """
-        self.emails = []
-        self.labels = []
+        self.emails, self.labels = [], []
         self.vectorizer = vectorizer or CountVectorizer(max_features=max_features)
 
-        # 遍历所有 mbox 文件
+        # 1) 先检查 .mbox 文件
         for fname in os.listdir(root_dir):
-            if not fname.endswith('.mbox'):
-                continue
-            path = os.path.join(root_dir, fname)
-            mbox = mailbox.mbox(path)
-            for msg in mbox:
-                text = self._extract_text(msg)
-                if text and text.strip():
-                    self.emails.append(text)
-                    self.labels.append(label)
+            if fname.endswith('.mbox'):
+                mbox = mailbox.mbox(os.path.join(root_dir, fname))
+                for msg in mbox:
+                    text = self._extract_text(msg)
+                    if text:
+                        self.emails.append(text); self.labels.append(label)
 
-        # 构建或复用词典
+        # 2) 再递归扫描 maildir（或者任意子文件夹下的文件）
+        for dirpath, _, files in os.walk(root_dir):
+            for fname in files:
+                path = os.path.join(dirpath, fname)
+                # 跳过已经处理过的 .mbox
+                if fname.endswith('.mbox'):
+                    continue
+                # 假设其余文件都是单封邮件，按 email 库解析
+                try:
+                    from email import policy, message_from_file
+                    with open(path, encoding='utf-8', errors='ignore') as f:
+                        msg = message_from_file(f, policy=policy.default)
+                    text = self._extract_text(msg)
+                    if text:
+                        self.emails.append(text); self.labels.append(label)
+                except:
+                    pass
+
+        # Fit / transform
         if not hasattr(self.vectorizer, 'vocabulary_'):
             self.vectorizer.fit(self.emails)
-        # 文本转稀疏特征矩阵
         self.features = self.vectorizer.transform(self.emails)
 
     def _extract_text(self, msg):
-        # 提取纯文本部分，并去除 HTML 标签
         if msg.is_multipart():
             parts = []
-            for part in msg.walk():
-                if part.get_content_type() == 'text/plain':
-                    payload = part.get_payload(decode=True)
-                    if payload:
-                        parts.append(payload)
-            raw = b''.join(parts).decode('utf-8', errors='ignore')
+            for p in msg.walk():
+                if p.get_content_type()=='text/plain':
+                    payload = p.get_payload(decode=True)
+                    if payload: parts.append(payload)
+            raw = b''.join(parts).decode('utf-8', 'ignore')
         else:
-            raw = msg.get_payload(decode=True).decode('utf-8', errors='ignore')
-        # 去掉 HTML 标签
+            raw = msg.get_payload(decode=True).decode('utf-8', 'ignore')
         return re.sub(r'<[^>]+>', ' ', raw)
 
-    def __len__(self):
-        return len(self.labels)
-
-    def __getitem__(self, idx):
-        # 返回 numpy 数组和标签
-        x = self.features[idx].toarray().squeeze(0)
-        y = self.labels[idx]
-        return x, y
+    def __len__(self):   return len(self.labels)
+    def __getitem__(self,i):
+        x = self.features[i].toarray().squeeze(0)
+        return x, self.labels[i]

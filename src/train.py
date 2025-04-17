@@ -60,8 +60,8 @@ def main():
     os.makedirs('checkpoints', exist_ok=True)
 
     # 加载数据集
-    phishing = EmailDataset('data/phishing',    label=1)
-    legit    = EmailDataset('data/legitimate', label=0,
+    phishing = EmailDataset('../data/phishing',    label=1)
+    legit    = EmailDataset('../data/legitimate_sample', label=0,
                              vectorizer=phishing.vectorizer)
     full_ds = ConcatDataset([phishing, legit])
 
